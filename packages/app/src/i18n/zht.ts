@@ -375,6 +375,7 @@ export const dict = {
   "context.stats.sessionCreated": "建立時間",
   "context.stats.lastActivity": "最後活動",
 
+
   "context.usage.tokens": "Token",
   "context.usage.usage": "使用量",
   "context.usage.cost": "成本",

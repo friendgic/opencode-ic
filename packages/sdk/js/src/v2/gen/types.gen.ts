@@ -359,6 +359,19 @@ export type EventSessionIdle = {
   }
 }
 
+export type EventSessionLlmRequest = {
+  type: "session.llm.request"
+  properties: {
+    sessionID: string
+    assistantMessageID: string
+    approxTotalChars: number
+    messagesTotalChars: number
+    toolsTotalChars: number
+    messageCount: number
+    toolCount: number
+  }
+}
+
 export type EventSessionCompacted = {
   type: "session.compacted"
   properties: {
@@ -1132,6 +1145,7 @@ export type GlobalEvent = {
     | EventTodoUpdated
     | EventSessionStatus
     | EventSessionIdle
+    | EventSessionLlmRequest
     | EventSessionCompacted
     | EventTuiPromptAppend
     | EventTuiCommandExecute
@@ -1695,6 +1709,10 @@ export type Config = {
      * Timeout in milliseconds for model context protocol (MCP) requests
      */
     mcp_timeout?: number
+    /**
+     * Write each outbound LLM request (full messages JSON + tool descriptions/schemas) under the log directory as llm-requests*.json.
+     */
+    log_llm_full?: boolean
   }
 }
 
@@ -2075,6 +2093,7 @@ export type Event =
   | EventTodoUpdated
   | EventSessionStatus
   | EventSessionIdle
+  | EventSessionLlmRequest
   | EventSessionCompacted
   | EventTuiPromptAppend
   | EventTuiCommandExecute
