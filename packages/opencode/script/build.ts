@@ -297,12 +297,36 @@ for (const item of targets) {
   binaries[name] = Script.version
 }
 
+async function zipWindowsReleaseBin(key: string) {
+  const binDir = path.join(dir, `dist/${key}/bin`)
+  const zipPath = path.join(dir, `dist/${key}.zip`)
+  const zipProbe = await $`command -v zip`.quiet().nothrow()
+  if (zipProbe.exitCode === 0) {
+    await $`zip -r ${zipPath} *`.cwd(binDir)
+    return
+  }
+  const script = [
+    "import zipfile",
+    "from pathlib import Path",
+    `src = Path(${JSON.stringify(binDir)})`,
+    `out = Path(${JSON.stringify(zipPath)})`,
+    "with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:",
+    "    for p in src.rglob('*'):",
+    "        if p.is_file():",
+    "            z.write(p, p.relative_to(src))",
+  ].join("\n")
+  const py = await $`python3 -c ${script}`.quiet().nothrow()
+  if (py.exitCode !== 0) {
+    throw new Error(`release zip: install zip or python3 to archive ${key} (python3 failed)`)
+  }
+}
+
 if (Script.release) {
   for (const key of Object.keys(binaries)) {
     if (key.includes("linux")) {
       await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
     } else {
-      await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
+      await zipWindowsReleaseBin(key)
     }
   }
   await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${process.env.GH_REPO}`
