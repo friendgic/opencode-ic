@@ -24,6 +24,19 @@ import { isRecord } from "@/util/record"
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
 
+function toolCallStreamId(value: { id?: string; toolCallId?: string }): string | undefined {
+  if (typeof value.toolCallId === "string") return value.toolCallId
+  if (typeof value.id === "string") return value.id
+  return undefined
+}
+
+function toolInputTextDelta(value: unknown): string {
+  const v = value as Record<string, unknown>
+  if (typeof v.inputTextDelta === "string") return v.inputTextDelta
+  if (typeof v.delta === "string") return v.delta
+  return ""
+}
+
 export type Result = "compact" | "stop" | "continue"
 
 export type Event = LLM.Event
@@ -260,26 +273,48 @@ export const layer: Layer.Layer<
             if (ctx.assistantMessage.summary) {
               throw new Error(`Tool call not allowed while generating summary: ${value.toolName}`)
             }
-            const part = yield* session.updatePart({
-              id: ctx.toolcalls[value.id]?.partID ?? PartID.ascending(),
-              messageID: ctx.assistantMessage.id,
-              sessionID: ctx.assistantMessage.sessionID,
-              type: "tool",
-              tool: value.toolName,
-              callID: value.id,
-              state: { status: "pending", input: {}, raw: "" },
-              metadata: value.providerExecuted ? { providerExecuted: true } : undefined,
-            } satisfies MessageV2.ToolPart)
-            ctx.toolcalls[value.id] = {
-              done: yield* Deferred.make<void>(),
-              partID: part.id,
-              messageID: part.messageID,
-              sessionID: part.sessionID,
+            {
+              const callID = toolCallStreamId(value)
+              if (!callID) {
+                log.warn("tool-input-start missing id/toolCallId", { value })
+                return
+              }
+              const part = yield* session.updatePart({
+                id: ctx.toolcalls[callID]?.partID ?? PartID.ascending(),
+                messageID: ctx.assistantMessage.id,
+                sessionID: ctx.assistantMessage.sessionID,
+                type: "tool",
+                tool: value.toolName,
+                callID,
+                state: { status: "pending", input: {}, raw: "" },
+                metadata: value.providerExecuted ? { providerExecuted: true } : undefined,
+              } satisfies MessageV2.ToolPart)
+              ctx.toolcalls[callID] = {
+                done: yield* Deferred.make<void>(),
+                partID: part.id,
+                messageID: part.messageID,
+                sessionID: part.sessionID,
+              }
             }
             return
 
-          case "tool-input-delta":
+          case "tool-input-delta": {
+            const callID = toolCallStreamId(value)
+            const delta = toolInputTextDelta(value)
+            if (!callID || delta.length === 0) return
+            const match = yield* readToolCall(callID)
+            if (!match || match.part.type !== "tool") return
+            if (match.part.state.status !== "pending") return
+            yield* session.updatePart({
+              ...match.part,
+              state: {
+                status: "pending",
+                input: match.part.state.input,
+                raw: match.part.state.raw + delta,
+              },
+            })
             return
+          }
 
           case "tool-input-end":
             return

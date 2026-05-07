@@ -96,6 +96,48 @@ const GO_UPSELL_LAST_SEEN_AT = "go_upsell_last_seen_at"
 const GO_UPSELL_DONT_SHOW = "go_upsell_dont_show"
 const GO_UPSELL_WINDOW = 86_400_000 // 24 hrs
 
+function sanitizeTuiNotifyPlaceholder(s: string) {
+  return s.replace(/[`$\\]/g, "").replace(/\s+/g, " ").slice(0, 400)
+}
+
+function expandTuiNotifyCommand(
+  template: string,
+  vars: {
+    sessionID: string
+    workspaceID: string
+    questionId?: string
+    questionPreview?: string
+  },
+) {
+  let s = template.replaceAll("$SESSION_ID", vars.sessionID).replaceAll("$WORKSPACE_ID", vars.workspaceID)
+  s = s.replaceAll("$QUESTION_ID", vars.questionId ?? "")
+  s = s.replaceAll("$QUESTION_PREVIEW", sanitizeTuiNotifyPlaceholder(vars.questionPreview ?? ""))
+  return s
+}
+
+function runTuiNotifyShell(command: string, extraEnv: Record<string, string>) {
+  const merged = { ...process.env, ...extraEnv }
+  try {
+    if (process.platform === "win32") {
+      Bun.spawn(["cmd", "/d", "/s", "/c", command], {
+        env: merged,
+        stdout: "ignore",
+        stderr: "ignore",
+        stdin: "ignore",
+      })
+    } else {
+      Bun.spawn(["sh", "-c", command], {
+        env: merged,
+        stdout: "ignore",
+        stderr: "ignore",
+        stdin: "ignore",
+      })
+    }
+  } catch {
+    // User-provided command; do not break the TUI
+  }
+}
+
 const context = createContext<{
   width: number
   sessionID: string
@@ -219,6 +261,85 @@ export function Session() {
         duration: 5000,
       })
       navigate({ type: "home" })
+    })
+  })
+
+  const notifyIdleSession = { id: "" as string, wasBusy: false }
+
+  createEffect(() => {
+    if (!tuiConfig.notify_on_idle) return
+    const raw = tuiConfig.notify_on_idle_command?.trim()
+    if (!raw) return
+
+    const sessionID = route.sessionID
+    if (!sessionID) return
+    if (notifyIdleSession.id !== sessionID) {
+      notifyIdleSession.id = sessionID
+      notifyIdleSession.wasBusy = false
+    }
+    const st = sync.data.session_status?.[sessionID]
+    const type = st?.type ?? "idle"
+    if (type === "busy" || type === "retry") {
+      notifyIdleSession.wasBusy = true
+      return
+    }
+    if (!notifyIdleSession.wasBusy || type !== "idle") return
+
+    notifyIdleSession.wasBusy = false
+    const workspaceID = project.workspace.current() ?? ""
+    const command = expandTuiNotifyCommand(raw, { sessionID, workspaceID })
+    queueMicrotask(() => {
+      runTuiNotifyShell(command, {
+        OPENCODE_SESSION_ID: sessionID,
+        OPENCODE_WORKSPACE_ID: workspaceID,
+        OPENCODE_NOTIFY_KIND: "idle",
+      })
+    })
+  })
+
+  const questionNotifySession = { id: "" as string, lastRequestId: "" as string }
+
+  createEffect(() => {
+    if (!tuiConfig.notify_on_question) return
+    const raw = tuiConfig.notify_on_question_command?.trim() ?? tuiConfig.notify_on_idle_command?.trim()
+    if (!raw) return
+
+    const sessionID = route.sessionID
+    if (!sessionID) return
+    if (questionNotifySession.id !== sessionID) {
+      questionNotifySession.id = sessionID
+      questionNotifySession.lastRequestId = ""
+    }
+
+    const pending = questions()[0]
+    if (!pending) {
+      questionNotifySession.lastRequestId = ""
+      return
+    }
+    if (pending.id === questionNotifySession.lastRequestId) return
+
+    questionNotifySession.lastRequestId = pending.id
+
+    const workspaceID = project.workspace.current() ?? ""
+    const first = pending.questions[0]
+    const preview = first
+      ? `${first.header}: ${first.question}`.replace(/\s+/g, " ").trim().slice(0, 300)
+      : ""
+
+    const command = expandTuiNotifyCommand(raw, {
+      sessionID,
+      workspaceID,
+      questionId: pending.id,
+      questionPreview: preview,
+    })
+    queueMicrotask(() => {
+      runTuiNotifyShell(command, {
+        OPENCODE_SESSION_ID: sessionID,
+        OPENCODE_WORKSPACE_ID: workspaceID,
+        OPENCODE_NOTIFY_KIND: "question",
+        OPENCODE_QUESTION_ID: pending.id,
+        OPENCODE_QUESTION_PREVIEW: preview,
+      })
     })
   })
 
@@ -2084,6 +2205,39 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
 
   const files = createMemo(() => props.metadata.files ?? [])
 
+  const patchInputBytes = createMemo(() => {
+    const s = props.part.state
+    if (s.status === "pending") return s.raw.length
+    if (s.status === "running") {
+      const inp = s.input as unknown
+      if (typeof inp === "string") return inp.length
+      if (inp && typeof inp === "object" && "patchText" in inp) {
+        const pt = (inp as { patchText?: unknown }).patchText
+        if (typeof pt === "string") return pt.length
+      }
+    }
+    return 0
+  })
+
+  const patchPendingLabel = createMemo(() => {
+    const s = props.part.state
+    const n = patchInputBytes()
+    if (s.status === "running") {
+      if (n <= 0) return "Applying patch…"
+      return n >= 1024 ? `Applying patch… (${(n / 1024).toFixed(1)} KB)` : `Applying patch… (${n} chars)`
+    }
+    if (n <= 0) return "Preparing patch…"
+    return n >= 1024 ? `Receiving patch… ${(n / 1024).toFixed(1)} KB` : `Receiving patch… ${n} chars`
+  })
+
+  const patchStreamTail = createMemo(() => {
+    if (props.part.state.status !== "pending") return ""
+    const raw = props.part.state.raw
+    if (!raw.length) return ""
+    const t = raw.replace(/\s+/g, " ").trimEnd()
+    return t.length > 96 ? `…${t.slice(-96)}` : t
+  })
+
   const view = createMemo(() => {
     const diffStyle = ctx.tui.diff_style
     if (diffStyle === "stacked") return "unified"
@@ -2145,9 +2299,16 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
         </For>
       </Match>
       <Match when={true}>
-        <InlineTool icon="%" pending="Preparing patch..." complete={false} part={props.part}>
-          Patch
-        </InlineTool>
+        <box flexDirection="column" gap={0}>
+          <InlineTool icon="%" pending={patchPendingLabel()} complete={false} part={props.part}>
+            Patch
+          </InlineTool>
+          <Show when={patchStreamTail()}>
+            <text paddingLeft={6} fg={theme.textMuted} wrapMode="char">
+              {patchStreamTail()}
+            </text>
+          </Show>
+        </box>
       </Match>
     </Switch>
   )
