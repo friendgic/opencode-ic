@@ -2207,6 +2207,8 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
 
   const patchInputBytes = createMemo(() => {
     const s = props.part.state
+    const rawChars = props.part.metadata?.rawChars
+    if (typeof rawChars === "number" && Number.isFinite(rawChars) && rawChars > 0) return rawChars
     if (s.status === "pending") return s.raw.length
     if (s.status === "running") {
       const inp = s.input as unknown

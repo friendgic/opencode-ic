@@ -22,6 +22,7 @@ import * as Log from "@opencode-ai/core/util/log"
 import { isRecord } from "@/util/record"
 
 const DOOM_LOOP_THRESHOLD = 3
+const MAX_PATCH_RAW_CHARS = 128 * 1024
 const log = Log.create({ service: "session.processor" })
 
 function toolCallStreamId(value: { id?: string; toolCallId?: string }): string | undefined {
@@ -287,7 +288,12 @@ export const layer: Layer.Layer<
                 tool: value.toolName,
                 callID,
                 state: { status: "pending", input: {}, raw: "" },
-                metadata: value.providerExecuted ? { providerExecuted: true } : undefined,
+                metadata:
+                  value.toolName === "apply_patch"
+                    ? { ...(value.providerExecuted ? { providerExecuted: true } : {}), rawChars: 0 }
+                    : value.providerExecuted
+                      ? { providerExecuted: true }
+                      : undefined,
               } satisfies MessageV2.ToolPart)
               ctx.toolcalls[callID] = {
                 done: yield* Deferred.make<void>(),
@@ -304,13 +310,23 @@ export const layer: Layer.Layer<
             if (!callID || delta.length === 0) return
             const match = yield* readToolCall(callID)
             if (!match || match.part.type !== "tool") return
+            if (match.part.tool !== "apply_patch") return
             if (match.part.state.status !== "pending") return
+            const rawChars =
+              typeof match.part.metadata?.rawChars === "number" && Number.isFinite(match.part.metadata.rawChars)
+                ? match.part.metadata.rawChars
+                : 0
+            const nextRaw = (match.part.state.raw + delta).slice(-MAX_PATCH_RAW_CHARS)
             yield* session.updatePart({
               ...match.part,
               state: {
                 status: "pending",
                 input: match.part.state.input,
-                raw: match.part.state.raw + delta,
+                raw: nextRaw,
+              },
+              metadata: {
+                ...(isRecord(match.part.metadata) ? match.part.metadata : {}),
+                rawChars: rawChars + delta.length,
               },
             })
             return
