@@ -1,4 +1,4 @@
-import fs from "node:fs/promises"
+import { access, constants, readFile } from "node:fs/promises"
 import { AppFileSystem } from "@opencode-ai/core/filesystem"
 import { Hono } from "hono"
 import { proxy } from "hono/proxy"
@@ -13,10 +13,14 @@ export async function serveUI(request: Request) {
     const match = embeddedWebUI[path.replace(/^\//, "")] ?? embeddedWebUI["index.html"] ?? null
     if (!match) return Response.json({ error: "Not Found" }, { status: 404 })
 
-    if (await fs.exists(match)) {
+    if (
+      await access(match, constants.F_OK)
+        .then(() => true)
+        .catch(() => false)
+    ) {
       const mime = AppFileSystem.mimeType(match)
       const headers = new Headers({ "content-type": mime })
-      const body = new Uint8Array(await fs.readFile(match))
+      const body = new Uint8Array(await readFile(match))
       if (mime.startsWith("text/html")) {
         headers.set("content-security-policy", cspForHtml(new TextDecoder().decode(body)))
       }
