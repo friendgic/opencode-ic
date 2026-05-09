@@ -378,6 +378,7 @@ export const dict = {
   "context.stats.sessionCreated": "Sesión Creada",
   "context.stats.lastActivity": "Última Actividad",
 
+
   "context.usage.tokens": "Tokens",
   "context.usage.usage": "Uso",
   "context.usage.cost": "Costo",

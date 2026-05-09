@@ -381,6 +381,7 @@ export const dict = {
   "context.stats.sessionCreated": "Oturum Oluşturulma",
   "context.stats.lastActivity": "Son Etkinlik",
 
+
   "context.usage.tokens": "Tokenler",
   "context.usage.usage": "Kullanım",
   "context.usage.cost": "Maliyet",
