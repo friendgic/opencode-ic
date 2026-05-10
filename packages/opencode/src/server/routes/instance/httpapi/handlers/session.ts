@@ -206,7 +206,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* promptSvc.command({
         sessionID: ctx.params.sessionID,
         messageID: ctx.payload.messageID,
-        model: `${ctx.payload.providerID}/${ctx.payload.modelID}`,
+        model: { providerID: ctx.payload.providerID, modelID: ctx.payload.modelID },
         command: Command.Default.INIT,
         arguments: "",
       })

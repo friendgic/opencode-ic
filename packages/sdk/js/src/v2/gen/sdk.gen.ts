@@ -3738,7 +3738,12 @@ export class Session2 extends HeyApiClient {
       workspace?: string
       messageID?: string
       agent?: string
-      model?: string
+      model?:
+        | string
+        | {
+            providerID: string
+            modelID: string
+          }
       arguments?: string
       command?: string
       variant?: string

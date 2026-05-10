@@ -297,6 +297,16 @@ export type TuiKV = {
   readonly ready: boolean
 }
 
+/** Latest outbound LLM request size (approx. UTF-16-ish chars before model middleware); from `session.llm.request` SSE. */
+export type TuiSessionLlmRequestApprox = {
+  assistantMessageID: string
+  approxTotalChars: number
+  messagesTotalChars: number
+  toolsTotalChars: number
+  messageCount: number
+  toolCount: number
+}
+
 export type TuiState = {
   readonly ready: boolean
   readonly config: SdkConfig
@@ -316,6 +326,7 @@ export type TuiState = {
     status: (sessionID: string) => SessionStatus | undefined
     permission: (sessionID: string) => ReadonlyArray<PermissionRequest>
     question: (sessionID: string) => ReadonlyArray<QuestionRequest>
+    llmRequest: (sessionID: string) => TuiSessionLlmRequestApprox | undefined
   }
   part: (messageID: string) => ReadonlyArray<Part>
   lsp: () => ReadonlyArray<TuiSidebarLspItem>

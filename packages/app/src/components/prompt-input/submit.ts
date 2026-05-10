@@ -86,7 +86,10 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
         command: cmd,
         arguments: tail.join(" "),
         agent: input.draft.agent,
-        model: `${input.draft.model.providerID}/${input.draft.model.modelID}`,
+        model: {
+          providerID: input.draft.model.providerID,
+          modelID: input.draft.model.modelID,
+        },
         variant: input.draft.variant,
         parts: images.map((attachment) => ({
           id: Identifier.ascending("part"),
@@ -464,7 +467,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
             command: commandName,
             arguments: args.join(" "),
             agent,
-            model: `${model.providerID}/${model.modelID}`,
+            model: {
+              providerID: model.providerID,
+              modelID: model.modelID,
+            },
             variant,
             parts: images.map((attachment) => ({
               id: Identifier.ascending("part"),

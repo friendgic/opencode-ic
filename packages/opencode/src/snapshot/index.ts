@@ -161,6 +161,19 @@ export const layer: Layer.Layer<
           )
         })
 
+        const tracked = Effect.fnUntraced(function* (files: string[]) {
+          if (!files.length) return new Set<string>()
+          const result = yield* git(
+            [...quote, ...args(["ls-files", "-z", "--cached", "--pathspec-from-file=-", "--pathspec-file-nul"])],
+            {
+              cwd: state.directory,
+              stdin: feed(files),
+            },
+          )
+          if (result.code !== 0) return new Set<string>()
+          return new Set(result.text.split("\0").filter(Boolean))
+        })
+
         const stage = Effect.fnUntraced(function* (files: string[]) {
           if (!files.length) return
           const result = yield* git(
@@ -197,6 +210,51 @@ export const layer: Layer.Layer<
           return file
         })
 
+        const dirty = Effect.fnUntraced(function* () {
+          const prefix = path.relative(state.worktree, state.directory).replaceAll("\\", "/")
+          const normalize = (item: string) => {
+            const next = item.replaceAll("\\", "/").replace(/^\.\/+/, "").trim()
+            if (!next) return ""
+            if (!prefix || prefix === ".") return next
+            if (next === prefix) return "."
+            if (next.startsWith(`${prefix}/`)) return next.slice(prefix.length + 1)
+            return ""
+          }
+          const source = yield* Effect.all(
+            [
+              git([...quote, "diff", "--name-only", "-z", "--", "."], {
+                cwd: state.worktree,
+              }),
+              git([...quote, "diff", "--cached", "--name-only", "-z", "--", "."], {
+                cwd: state.worktree,
+              }),
+              git([...quote, "ls-files", "--others", "--exclude-standard", "-z", "--", "."], {
+                cwd: state.worktree,
+              }),
+            ],
+            { concurrency: 3 },
+          )
+          if (source.some((item) => item.code !== 0)) {
+            log.warn("failed to list source dirty files", {
+              diffCode: source[0]?.code,
+              diffStderr: source[0]?.stderr,
+              cachedCode: source[1]?.code,
+              cachedStderr: source[1]?.stderr,
+              othersCode: source[2]?.code,
+              othersStderr: source[2]?.stderr,
+            })
+            return []
+          }
+          return Array.from(
+            new Set(
+              source
+                .flatMap((item) => item.text.split("\0"))
+                .map(normalize)
+                .filter(Boolean),
+            ),
+          )
+        })
+
         const sync = Effect.fnUntraced(function* (list: string[] = []) {
           const file = yield* excludes()
           const target = path.join(state.gitdir, "info", "exclude")
@@ -212,35 +270,24 @@ export const layer: Layer.Layer<
 
         const add = Effect.fnUntraced(function* () {
           yield* sync()
-          const [diff, other] = yield* Effect.all(
-            [
-              git([...quote, ...args(["diff-files", "--name-only", "-z", "--", "."])], {
-                cwd: state.directory,
-              }),
-              git([...quote, ...args(["ls-files", "--others", "--exclude-standard", "-z", "--", "."])], {
-                cwd: state.directory,
-              }),
-            ],
-            { concurrency: 2 },
-          )
-          if (diff.code !== 0 || other.code !== 0) {
-            log.warn("failed to list snapshot files", {
-              diffCode: diff.code,
-              diffStderr: diff.stderr,
-              otherCode: other.code,
-              otherStderr: other.stderr,
-            })
-            return
-          }
-
-          const tracked = diff.text.split("\0").filter(Boolean)
-          const untracked = other.text.split("\0").filter(Boolean)
-          const all = Array.from(new Set([...tracked, ...untracked]))
+          const all = yield* dirty()
           if (!all.length) return
+          const indexed = yield* tracked(all)
+          const candidates = (
+            yield* Effect.all(
+              all.map((item) =>
+                exists(path.join(state.directory, item)).pipe(
+                  Effect.map((hit) => (hit || indexed.has(item) ? item : undefined)),
+                ),
+              ),
+              { concurrency: 8 },
+            )
+          ).filter((item): item is string => Boolean(item))
+          if (!candidates.length) return
 
           // Resolve source-repo ignore rules against the exact candidate set.
           // --no-index keeps this pattern-based even when a path is already tracked.
-          const ignored = yield* ignore(all)
+          const ignored = yield* ignore(candidates)
 
           // Remove newly-ignored files from snapshot index to prevent re-adding
           if (ignored.size > 0) {
@@ -249,7 +296,7 @@ export const layer: Layer.Layer<
             yield* drop(ignoredFiles)
           }
 
-          const allow = all.filter((item) => !ignored.has(item))
+          const allow = candidates.filter((item) => !ignored.has(item))
           if (!allow.length) return
 
           const large = new Set(
@@ -269,7 +316,7 @@ export const layer: Layer.Layer<
               { concurrency: 8 },
             )).filter((item): item is string => Boolean(item)),
           )
-          const block = new Set(untracked.filter((item) => large.has(item)))
+          const block = new Set(all.filter((item) => large.has(item)))
           yield* sync(Array.from(block))
           // Stage only the allowed candidate paths so snapshot updates stay scoped.
           yield* stage(allow.filter((item) => !block.has(item)))
