@@ -290,6 +290,10 @@ export const Info = Schema.Struct({
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",
       }),
+      log_llm_full: Schema.optional(Schema.Boolean).annotate({
+        description:
+          "Write each outbound LLM request (full messages JSON + tool descriptions/schemas) under the log directory as llm-requests/*.json.",
+      }),
     }),
   ),
 })

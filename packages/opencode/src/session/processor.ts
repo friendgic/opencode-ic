@@ -26,7 +26,21 @@ import { Modelv2 } from "@/v2/model"
 import * as DateTime from "effect/DateTime"
 
 const DOOM_LOOP_THRESHOLD = 3
+const MAX_PATCH_RAW_CHARS = 128 * 1024
 const log = Log.create({ service: "session.processor" })
+
+function toolCallStreamId(value: { id?: string; toolCallId?: string }): string | undefined {
+  if (typeof value.toolCallId === "string") return value.toolCallId
+  if (typeof value.id === "string") return value.id
+  return undefined
+}
+
+function toolInputTextDelta(value: unknown): string {
+  const v = value as Record<string, unknown>
+  if (typeof v.inputTextDelta === "string") return v.inputTextDelta
+  if (typeof v.delta === "string") return v.delta
+  return ""
+}
 
 export type Result = "compact" | "stop" | "continue"
 
@@ -277,33 +291,70 @@ export const layer: Layer.Layer<
             if (ctx.assistantMessage.summary) {
               throw new Error(`Tool call not allowed while generating summary: ${value.toolName}`)
             }
-            // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-            EventV2.run(SessionEvent.Tool.Input.Started.Sync, {
-              sessionID: ctx.sessionID,
-              callID: value.id,
-              name: value.toolName,
-              timestamp: DateTime.makeUnsafe(Date.now()),
-            })
-            const part = yield* session.updatePart({
-              id: ctx.toolcalls[value.id]?.partID ?? PartID.ascending(),
-              messageID: ctx.assistantMessage.id,
-              sessionID: ctx.assistantMessage.sessionID,
-              type: "tool",
-              tool: value.toolName,
-              callID: value.id,
-              state: { status: "pending", input: {}, raw: "" },
-              metadata: value.providerExecuted ? { providerExecuted: true } : undefined,
-            } satisfies MessageV2.ToolPart)
-            ctx.toolcalls[value.id] = {
-              done: yield* Deferred.make<void>(),
-              partID: part.id,
-              messageID: part.messageID,
-              sessionID: part.sessionID,
+            {
+              const callID = toolCallStreamId(value)
+              if (!callID) {
+                log.warn("tool-input-start missing id/toolCallId", { value })
+                return
+              }
+              // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+              EventV2.run(SessionEvent.Tool.Input.Started.Sync, {
+                sessionID: ctx.sessionID,
+                callID,
+                name: value.toolName,
+                timestamp: DateTime.makeUnsafe(Date.now()),
+              })
+              const part = yield* session.updatePart({
+                id: ctx.toolcalls[callID]?.partID ?? PartID.ascending(),
+                messageID: ctx.assistantMessage.id,
+                sessionID: ctx.assistantMessage.sessionID,
+                type: "tool",
+                tool: value.toolName,
+                callID,
+                state: { status: "pending", input: {}, raw: "" },
+                metadata:
+                  value.toolName === "apply_patch"
+                    ? { ...(value.providerExecuted ? { providerExecuted: true } : {}), rawChars: 0 }
+                    : value.providerExecuted
+                      ? { providerExecuted: true }
+                      : undefined,
+              } satisfies MessageV2.ToolPart)
+              ctx.toolcalls[callID] = {
+                done: yield* Deferred.make<void>(),
+                partID: part.id,
+                messageID: part.messageID,
+                sessionID: part.sessionID,
+              }
             }
             return
 
-          case "tool-input-delta":
+          case "tool-input-delta": {
+            const callID = toolCallStreamId(value)
+            const delta = toolInputTextDelta(value)
+            if (!callID || delta.length === 0) return
+            const match = yield* readToolCall(callID)
+            if (!match || match.part.type !== "tool") return
+            if (match.part.tool !== "apply_patch") return
+            if (match.part.state.status !== "pending") return
+            const rawChars =
+              typeof match.part.metadata?.rawChars === "number" && Number.isFinite(match.part.metadata.rawChars)
+                ? match.part.metadata.rawChars
+                : 0
+            const nextRaw = (match.part.state.raw + delta).slice(-MAX_PATCH_RAW_CHARS)
+            yield* session.updatePart({
+              ...match.part,
+              state: {
+                status: "pending",
+                input: match.part.state.input,
+                raw: nextRaw,
+              },
+              metadata: {
+                ...(isRecord(match.part.metadata) ? match.part.metadata : {}),
+                rawChars: rawChars + delta.length,
+              },
+            })
             return
+          }
 
           case "tool-input-end": {
             // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
@@ -679,7 +730,10 @@ export const layer: Layer.Layer<
           yield* Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.reasoningMap = {}
-            const stream = llm.stream(streamInput)
+            const stream = llm.stream({
+              ...streamInput,
+              assistantMessageID: streamInput.assistantMessageID ?? ctx.assistantMessage.id,
+            })
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),

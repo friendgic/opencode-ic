@@ -23,6 +23,7 @@ export type Event =
   | EventTodoUpdated
   | EventSessionStatus
   | EventSessionIdle
+  | EventSessionLlmRequest1
   | EventSessionCompacted
   | EventTuiPromptAppend
   | EventTuiCommandExecute
@@ -788,6 +789,7 @@ export type GlobalEvent = {
     | EventTodoUpdated
     | EventSessionStatus
     | EventSessionIdle
+    | EventSessionLlmRequest
     | EventSessionCompacted
     | EventTuiPromptAppend
     | EventTuiCommandExecute
@@ -1234,6 +1236,7 @@ export type Config = {
     primary_tools?: Array<string>
     continue_loop_on_deny?: boolean
     mcp_timeout?: number
+    log_llm_full?: boolean
   }
 }
 
@@ -2435,6 +2438,20 @@ export type EventSessionIdle = {
   }
 }
 
+export type EventSessionLlmRequest = {
+  id: string
+  type: "session.llm.request"
+  properties: {
+    sessionID: string
+    assistantMessageID: string
+    approxTotalChars: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    messagesTotalChars: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    toolsTotalChars: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    messageCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    toolCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
 export type EventSessionCompacted = {
   id: string
   type: "session.compacted"
@@ -3233,6 +3250,20 @@ export type SessionMessage =
   | SessionMessageShell
   | SessionMessageAssistant
   | SessionMessageCompaction
+
+export type EventSessionLlmRequest1 = {
+  id: string
+  type: "session.llm.request"
+  properties: {
+    sessionID: string
+    assistantMessageID: string
+    approxTotalChars: number | "NaN" | "Infinity" | "-Infinity"
+    messagesTotalChars: number | "NaN" | "Infinity" | "-Infinity"
+    toolsTotalChars: number | "NaN" | "Infinity" | "-Infinity"
+    messageCount: number | "NaN" | "Infinity" | "-Infinity"
+    toolCount: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
 
 export type EventTuiToastShow1 = {
   id: string
@@ -5769,7 +5800,12 @@ export type SessionCommandData = {
   body?: {
     messageID?: string
     agent?: string
-    model?: string
+    model?:
+      | string
+      | {
+          providerID: string
+          modelID: string
+        }
     arguments: string
     command: string
     variant?: string

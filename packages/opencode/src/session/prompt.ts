@@ -1697,7 +1697,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           const cmdAgent = yield* agents.get(cmd.agent)
           if (cmdAgent?.model) return cmdAgent.model
         }
-        if (input.model) return Provider.parseModel(input.model)
+        const fromInput = resolveCommandSessionModel(input.model)
+        if (fromInput) return fromInput
         return yield* lastModel(input.sessionID)
       })
 
@@ -1729,9 +1730,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
       const userAgent = isSubtask ? (input.agent ?? (yield* agents.defaultAgent())) : agentName
       const userModel = isSubtask
-        ? input.model
-          ? Provider.parseModel(input.model)
-          : yield* lastModel(input.sessionID)
+        ? resolveCommandSessionModel(input.model) ?? (yield* lastModel(input.sessionID))
         : taskModel
 
       yield* plugin.trigger(
@@ -1804,6 +1803,14 @@ const ModelRef = Schema.Struct({
   modelID: ModelID,
 })
 
+function resolveCommandSessionModel(
+  model: string | Schema.Schema.Type<typeof ModelRef> | undefined,
+): { providerID: ProviderID; modelID: ModelID } | undefined {
+  if (model === undefined) return undefined
+  if (typeof model === "string") return Provider.parseModel(model)
+  return model
+}
+
 export const PromptInput = Schema.Struct({
   sessionID: SessionID,
   messageID: Schema.optional(MessageID),
@@ -1847,7 +1854,7 @@ export const CommandInput = Schema.Struct({
   messageID: Schema.optional(MessageID),
   sessionID: SessionID,
   agent: Schema.optional(Schema.String),
-  model: Schema.optional(Schema.String),
+  model: Schema.optional(Schema.Union([Schema.String, ModelRef])),
   arguments: Schema.String,
   command: Schema.String,
   variant: Schema.optional(Schema.String),

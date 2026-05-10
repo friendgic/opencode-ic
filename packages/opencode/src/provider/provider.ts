@@ -1736,10 +1736,34 @@ export function sort<T extends { id: string }>(models: T[]) {
 }
 
 export function parseModel(model: string) {
-  const [providerID, ...rest] = model.split("/")
+  const trimmed = model.trim()
+  if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
+    try {
+      const u = new URL(trimmed)
+      if (u.protocol === "http:" || u.protocol === "https:") {
+        const pathname = u.pathname.replace(/\/+$/, "")
+        if (pathname && pathname !== "/") {
+          const lastSlash = pathname.lastIndexOf("/")
+          const modelID = pathname.slice(lastSlash + 1)
+          if (modelID) {
+            const basePath = lastSlash === 0 ? "" : pathname.slice(0, lastSlash)
+            const providerID = `${u.origin}${basePath}`.replace(/\/+$/, "")
+            return {
+              providerID: ProviderID.make(providerID),
+              modelID: ModelID.make(modelID),
+            }
+          }
+        }
+      }
+    } catch {
+      // fall through to provider/model split
+    }
+  }
+
+  const [providerID, ...rest] = trimmed.split("/")
   return {
-    providerID: ProviderID.make(providerID),
-    modelID: ModelID.make(rest.join("/")),
+    providerID: ProviderID.make(providerID.replace(/\/+$/, "")),
+    modelID: ModelID.make(rest.join("/").replace(/^\/+/, "")),
   }
 }
 

@@ -1,6 +1,8 @@
+import { TextAttributes } from "@opentui/core"
 import { Prompt, type PromptRef } from "@tui/component/prompt"
 import { createEffect, createSignal, onMount } from "solid-js"
 import { Logo } from "../component/logo"
+import { useTheme } from "../context/theme"
 import { useProject } from "../context/project"
 import { useSync } from "../context/sync"
 import { Toast } from "../ui/toast"
@@ -18,6 +20,7 @@ const placeholder = {
 }
 
 export function Home() {
+  const { theme } = useTheme()
   const sync = useSync()
   const project = useProject()
   const route = useRouteData("home")
@@ -65,7 +68,12 @@ export function Home() {
         <box height={4} minHeight={0} flexShrink={1} />
         <box flexShrink={0}>
           <TuiPluginRuntime.Slot name="home_logo" mode="replace">
-            <Logo />
+            <box flexDirection="row" alignItems="center" gap={1}>
+              <Logo />
+              <text attributes={TextAttributes.BOLD} fg={theme.text}>
+                @IC魔改版
+              </text>
+            </box>
           </TuiPluginRuntime.Slot>
         </box>
         <box height={1} minHeight={0} flexShrink={1} />

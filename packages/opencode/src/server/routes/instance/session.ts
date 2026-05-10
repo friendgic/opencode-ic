@@ -377,7 +377,7 @@ export const SessionRoutes = lazy(() =>
           yield* svc.command({
             sessionID,
             messageID: body.messageID,
-            model: body.providerID + "/" + body.modelID,
+            model: { providerID: body.providerID, modelID: body.modelID },
             command: Command.Default.INIT,
             arguments: "",
           })

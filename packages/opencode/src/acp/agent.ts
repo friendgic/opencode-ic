@@ -1522,7 +1522,7 @@ export class Agent implements ACPAgent {
         sessionID,
         command: command.name,
         arguments: cmd.args,
-        model: model.providerID + "/" + model.modelID,
+        model: { providerID: model.providerID, modelID: model.modelID },
         agent,
         directory,
       })

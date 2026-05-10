@@ -975,7 +975,10 @@ export function Prompt(props: PromptProps) {
         command: command.slice(1),
         arguments: args,
         agent: agent.name,
-        model: `${selectedModel.providerID}/${selectedModel.modelID}`,
+        model: {
+          providerID: selectedModel.providerID,
+          modelID: selectedModel.modelID,
+        },
         messageID,
         variant,
         parts: nonTextParts
@@ -1520,7 +1523,7 @@ export function Prompt(props: PromptProps) {
                 <box flexShrink={0} flexDirection="row" gap={1}>
                   <box marginLeft={1}>
                     <Show when={kv.get("animations_enabled", true)} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
-                      <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+                      <Spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
                     </Show>
                   </box>
                   <box flexDirection="row" gap={1} flexShrink={0}>

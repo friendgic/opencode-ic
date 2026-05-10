@@ -376,6 +376,7 @@ export const dict = {
   "context.stats.sessionCreated": "Session oprettet",
   "context.stats.lastActivity": "Seneste aktivitet",
 
+
   "context.usage.tokens": "Tokens",
   "context.usage.usage": "Forbrug",
   "context.usage.cost": "Omkostning",
