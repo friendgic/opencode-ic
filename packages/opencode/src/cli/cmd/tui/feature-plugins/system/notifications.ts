@@ -1,5 +1,6 @@
 import type { Event } from "@opencode-ai/sdk/v2"
 import type { TuiAttentionSoundName, TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
+import { runWinNotify } from "@/cli/cmd/tui/config/win-notify"
 import type { InternalTuiPlugin } from "../../plugin/internal"
 
 const id = "internal:notifications"
@@ -36,6 +37,16 @@ const tui: TuiPlugin = async (api) => {
     if (questions.has(event.properties.id)) return
     questions.add(event.properties.id)
     notify(api, event.properties.sessionID, "Question needs input", "question")
+    const first = event.properties.questions[0]
+    const preview = first
+      ? `${first.header}: ${first.question}`.replace(/\s+/g, " ").trim().slice(0, 300)
+      : ""
+    void runWinNotify({
+      OPENCODE_SESSION_ID: event.properties.sessionID,
+      OPENCODE_NOTIFY_KIND: "question",
+      OPENCODE_QUESTION_ID: event.properties.id,
+      OPENCODE_QUESTION_PREVIEW: preview,
+    })
   })
 
   api.event.on("question.replied", (event) => {
@@ -75,6 +86,12 @@ const tui: TuiPlugin = async (api) => {
 
     const session = api.state.session.get(sessionID)
     notify(api, sessionID, "Session done", session?.parentID ? "subagent_done" : "done")
+    if (!session?.parentID) {
+      void runWinNotify({
+        OPENCODE_SESSION_ID: sessionID,
+        OPENCODE_NOTIFY_KIND: "idle",
+      })
+    }
   })
 
   api.event.on("session.error", (event) => {

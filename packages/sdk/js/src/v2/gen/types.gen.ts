@@ -80,6 +80,7 @@ export type Event =
   | EventQuestionAsked
   | EventQuestionReplied
   | EventQuestionRejected
+  | EventSessionLlmRequest
   | EventSessionStatus
   | EventSessionIdle
   | EventSessionCompacted
@@ -1534,6 +1535,19 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.llm.request"
+        properties: {
+          sessionID: string
+          assistantMessageID: string
+          approxTotalChars: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          messagesTotalChars: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          toolsTotalChars: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          messageCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          toolCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+      }
+    | {
+        id: string
         type: "session.status"
         properties: {
           sessionID: string
@@ -2045,6 +2059,7 @@ export type Config = {
     primary_tools?: Array<string>
     continue_loop_on_deny?: boolean
     mcp_timeout?: number
+    log_llm_full?: boolean
     policies?: Array<ConfigV2ExperimentalPolicy>
   }
 }
@@ -5046,6 +5061,20 @@ export type EventQuestionRejected = {
   properties: {
     sessionID: string
     requestID: string
+  }
+}
+
+export type EventSessionLlmRequest = {
+  id: string
+  type: "session.llm.request"
+  properties: {
+    sessionID: string
+    assistantMessageID: string
+    approxTotalChars: number | "NaN" | "Infinity" | "-Infinity"
+    messagesTotalChars: number | "NaN" | "Infinity" | "-Infinity"
+    toolsTotalChars: number | "NaN" | "Infinity" | "-Infinity"
+    messageCount: number | "NaN" | "Infinity" | "-Infinity"
+    toolCount: number | "NaN" | "Infinity" | "-Infinity"
   }
 }
 

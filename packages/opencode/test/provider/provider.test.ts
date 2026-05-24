@@ -336,6 +336,12 @@ test("parseModel handles model IDs with slashes", () => {
   expect(String(result.modelID)).toBe("anthropic/claude-3-opus")
 })
 
+test("parseModel handles URL provider IDs", () => {
+  const result = Provider.parseModel("https://www.fucheers.top/gpt-5.5")
+  expect(String(result.providerID)).toBe("https://www.fucheers.top")
+  expect(String(result.modelID)).toBe("gpt-5.5")
+})
+
 it.instance("defaultModel returns first available model when no config set", () =>
   Effect.gen(function* () {
     yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")

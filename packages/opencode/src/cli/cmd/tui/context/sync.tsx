@@ -57,6 +57,18 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       session_status: {
         [sessionID: string]: SessionStatus
       }
+      session_llm_request: {
+        [sessionID: string]:
+          | {
+              assistantMessageID: string
+              approxTotalChars: number
+              messagesTotalChars: number
+              toolsTotalChars: number
+              messageCount: number
+              toolCount: number
+            }
+          | undefined
+      }
       session_diff: {
         [sessionID: string]: Snapshot.FileDiff[]
       }
@@ -96,6 +108,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       provider_default: {},
       session: [],
       session_status: {},
+      session_llm_request: {},
       session_diff: {},
       todo: {},
       message: {},
@@ -227,7 +240,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           break
 
         case "session.deleted": {
-          const result = Binary.search(store.session, event.properties.info.id, (s) => s.id)
+          const id = event.properties.info.id
+          const result = Binary.search(store.session, id, (s) => s.id)
           if (result.found) {
             setStore(
               "session",
@@ -236,6 +250,12 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               }),
             )
           }
+          setStore(
+            "session_llm_request",
+            produce((draft) => {
+              delete draft[id]
+            }),
+          )
           break
         }
         case "session.updated": {
@@ -271,6 +291,27 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
         case "session.status": {
           setStore("session_status", event.properties.sessionID, event.properties.status)
+          break
+        }
+
+        case "session.llm.request": {
+          const p = event.properties as {
+            sessionID: string
+            assistantMessageID: string
+            approxTotalChars: number
+            messagesTotalChars: number
+            toolsTotalChars: number
+            messageCount: number
+            toolCount: number
+          }
+          setStore("session_llm_request", p.sessionID, {
+            assistantMessageID: p.assistantMessageID,
+            approxTotalChars: p.approxTotalChars,
+            messagesTotalChars: p.messagesTotalChars,
+            toolsTotalChars: p.toolsTotalChars,
+            messageCount: p.messageCount,
+            toolCount: p.toolCount,
+          })
           break
         }
 

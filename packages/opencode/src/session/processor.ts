@@ -34,7 +34,34 @@ import { toolFileSourceFromUri, Usage, type LLMEvent } from "@opencode-ai/llm"
 import { ToolOutput } from "@opencode-ai/core/tool-output"
 
 const DOOM_LOOP_THRESHOLD = 3
+const MAX_TOOL_RAW_CHARS = 128 * 1024
 const log = Log.create({ service: "session.processor" })
+
+function toolCallStreamId(value: { id?: string; toolCallId?: string }): string | undefined {
+  if (typeof value.toolCallId === "string") return value.toolCallId
+  if (typeof value.id === "string") return value.id
+  return undefined
+}
+
+function toolInputTextDelta(value: unknown): string {
+  const v = value as Record<string, unknown>
+  if (typeof v.text === "string") return v.text
+  if (typeof v.inputTextDelta === "string") return v.inputTextDelta
+  if (typeof v.delta === "string") return v.delta
+  return ""
+}
+
+function toolInputRawText(input: unknown): string {
+  if (typeof input === "string") return input
+  if (!input || typeof input !== "object") return ""
+  const text = JSON.stringify(input)
+  return typeof text === "string" ? text : ""
+}
+
+function toolInput(input: unknown) {
+  if (isRecord(input)) return input
+  return { value: input }
+}
 
 export type Result = "compact" | "stop" | "continue"
 
@@ -435,22 +462,44 @@ export const layer = Layer.effect(
             yield* ensureToolCall(value)
             return
 
-          case "tool-input-delta":
-            {
-              const toolCall = yield* ensureToolCall(value)
-              const assistantMessageID = mirrorAssistant ? yield* requireV2AssistantMessage(toolCall.call) : undefined
-              if (assistantMessageID) {
-                yield* events.publish(SessionEvent.Tool.Input.Delta, {
-                  sessionID: ctx.sessionID,
-                  assistantMessageID,
-                  callID: value.id,
-                  delta: value.text,
-                  timestamp: DateTime.makeUnsafe(Date.now()),
-                })
-              }
-              ctx.toolcalls[value.id] = { ...toolCall.call, raw: toolCall.call.raw + value.text }
+          case "tool-input-delta": {
+            const callID = toolCallStreamId(value)
+            const delta = toolInputTextDelta(value)
+            if (!callID || delta.length === 0) return
+            const match = yield* ensureToolCall({ id: callID, name: value.name })
+            const assistantMessageID = mirrorAssistant ? yield* requireV2AssistantMessage(match.call) : undefined
+            if (assistantMessageID) {
+              yield* events.publish(SessionEvent.Tool.Input.Delta, {
+                sessionID: ctx.sessionID,
+                assistantMessageID,
+                callID,
+                delta,
+                timestamp: DateTime.makeUnsafe(Date.now()),
+              })
             }
+            ctx.toolcalls[callID] = { ...match.call, raw: (match.call.raw + delta).slice(-MAX_TOOL_RAW_CHARS) }
+            if (!match || match.part.type !== "tool") return
+            if (match.part.state.status !== "pending") return
+            const metadata: Record<string, unknown> = isRecord(match.part.metadata) ? match.part.metadata : {}
+            const rawChars =
+              typeof metadata.rawChars === "number" && Number.isFinite(metadata.rawChars)
+                ? metadata.rawChars
+                : 0
+            const nextRaw = (match.part.state.raw + delta).slice(-MAX_TOOL_RAW_CHARS)
+            yield* session.updatePart({
+              ...match.part,
+              state: {
+                status: "pending",
+                input: match.part.state.input,
+                raw: nextRaw,
+              },
+              metadata: {
+                ...metadata,
+                rawChars: rawChars + delta.length,
+              },
+            })
             return
+          }
 
           case "tool-input-end": {
             const toolCall = yield* ensureToolCall(value)
@@ -474,7 +523,8 @@ export const layer = Layer.effect(
               throw new Error(`Tool call not allowed while generating summary: ${value.name}`)
             }
             const toolCall = yield* ensureToolCall(value)
-            const input = isRecord(value.input) ? value.input : { value: value.input }
+            const input = toolInput(value.input)
+            const inputRaw = toolInputRawText(input)
             if (!toolCall.call.inputEnded) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
@@ -504,21 +554,34 @@ export const layer = Layer.effect(
                 timestamp: DateTime.makeUnsafe(Date.now()),
               })
             }
-            yield* updateToolCall(value.id, (match) => ({
-              ...match,
-              tool: value.name,
-              state:
-                match.state.status === "running"
-                  ? { ...match.state, input }
-                  : {
-                      status: "running",
-                      input,
-                      time: { start: Date.now() },
-                    },
-              metadata: match.metadata?.providerExecuted
-                ? { ...value.providerMetadata, providerExecuted: true }
-                : value.providerMetadata,
-            }))
+            yield* updateToolCall(value.id, (match) => {
+              const baseMetadata = match.metadata?.providerExecuted
+                ? { ...(isRecord(value.providerMetadata) ? value.providerMetadata : {}), providerExecuted: true }
+                : value.providerMetadata
+              const rawChars =
+                typeof match.metadata?.rawChars === "number" && Number.isFinite(match.metadata.rawChars)
+                  ? Math.max(match.metadata.rawChars, inputRaw.length)
+                  : inputRaw.length
+              return {
+                ...match,
+                tool: value.name,
+                state:
+                  match.state.status === "running"
+                    ? { ...match.state, input }
+                    : {
+                        status: "running",
+                        input,
+                        time: { start: Date.now() },
+                      },
+                metadata:
+                  rawChars > 0
+                    ? {
+                        ...(isRecord(baseMetadata) ? baseMetadata : {}),
+                        rawChars,
+                      }
+                    : baseMetadata,
+              }
+            })
 
             const parts = yield* MessageV2.parts(ctx.assistantMessage.id).pipe(
               Effect.provideService(Database.Service, database),
@@ -966,7 +1029,10 @@ export const layer = Layer.effect(
             ctx.currentTextID = undefined
             ctx.reasoningMap = {}
             yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream(streamInput)
+            const stream = llm.stream({
+              ...streamInput,
+              assistantMessageID: streamInput.assistantMessageID ?? ctx.assistantMessage.id,
+            })
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),

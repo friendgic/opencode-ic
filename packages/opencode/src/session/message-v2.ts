@@ -19,6 +19,8 @@ import {
   type ToolPart,
 } from "@opencode-ai/core/v1/session"
 
+export type { Part, WithParts } from "@opencode-ai/core/v1/session"
+
 import { NamedError } from "@opencode-ai/core/util/error"
 import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
 import { Database } from "@opencode-ai/core/database/database"
@@ -136,7 +138,7 @@ function hydrate(db: Database.Interface["db"], rows: (typeof MessageTable.$infer
 
 function providerMeta(metadata: Record<string, any> | undefined) {
   if (!metadata) return undefined
-  const { providerExecuted: _, ...rest } = metadata
+  const { providerExecuted: _, rawChars: __, ...rest } = metadata
   return Object.keys(rest).length > 0 ? rest : undefined
 }
 

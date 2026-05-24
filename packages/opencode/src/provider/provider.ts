@@ -1983,10 +1983,16 @@ export function sort<T extends { id: string }>(models: T[]) {
 }
 
 export function parseModel(model: string) {
-  const [providerID, ...rest] = model.split("/")
+  const index = model.startsWith("http://") || model.startsWith("https://") ? model.lastIndexOf("/") : model.indexOf("/")
+  if (index === -1) {
+    return {
+      providerID: ProviderV2.ID.make(model),
+      modelID: ModelV2.ID.make(""),
+    }
+  }
   return {
-    providerID: ProviderV2.ID.make(providerID),
-    modelID: ModelV2.ID.make(rest.join("/")),
+    providerID: ProviderV2.ID.make(model.slice(0, index)),
+    modelID: ModelV2.ID.make(model.slice(index + 1)),
   }
 }
 
