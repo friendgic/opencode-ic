@@ -1758,6 +1758,35 @@ function InlineTool(props: {
   })
 
   const error = createMemo(() => (props.part.state.status === "error" ? props.part.state.error : undefined))
+  const receivedChars = createMemo(() => {
+    const rawChars = props.part.metadata?.rawChars
+    if (typeof rawChars === "number" && Number.isFinite(rawChars) && rawChars > 0) return rawChars
+    const state = props.part.state
+    if (state.status === "pending") return state.raw.length
+    if (state.status !== "running") return 0
+    const input = (state as { input?: unknown }).input
+    if (typeof input === "string") return input.length
+    if (!input || typeof input !== "object") return 0
+    const text = JSON.stringify(input)
+    return typeof text === "string" ? text.length : 0
+  })
+  const pendingLabel = createMemo(() => {
+    const n = receivedChars()
+    if (n <= 0) return props.pending
+    return n >= 1024 ? `${props.pending} (${(n / 1024).toFixed(1)} KB)` : `${props.pending} (${n} bytes)`
+  })
+  const pendingTail = createMemo(() => {
+    const state = props.part.state
+    const raw =
+      state.status === "pending"
+        ? state.raw
+        : state.status === "running"
+          ? JSON.stringify((state as { input?: unknown }).input)
+          : ""
+    if (!raw) return ""
+    const text = raw.replace(/\s+/g, " ").trimEnd()
+    return text.length > 96 ? `…${text.slice(-96)}` : text
+  })
 
   const denied = createMemo(
     () =>
@@ -1806,12 +1835,17 @@ function InlineTool(props: {
         </Match>
         <Match when={true}>
           <text paddingLeft={3} fg={fg()} attributes={denied() ? TextAttributes.STRIKETHROUGH : undefined}>
-            <Show fallback={<>~ {props.pending}</>} when={props.complete}>
+            <Show fallback={<>~ {pendingLabel()}</>} when={props.complete}>
               <span style={{ fg: props.iconColor }}>{props.icon}</span> {props.children}
             </Show>
           </text>
         </Match>
       </Switch>
+      <Show when={!props.complete && pendingTail()}>
+        <text paddingLeft={6} fg={theme.textMuted} wrapMode="char">
+          {pendingTail()}
+        </text>
+      </Show>
       <Show when={error() && !denied()}>
         <text fg={theme.error}>{error()}</text>
       </Show>
@@ -2170,6 +2204,10 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
 
   const files = createMemo(() => props.metadata.files ?? [])
 
+  const patchPendingLabel = createMemo(() =>
+    props.part.state.status === "running" ? "Applying patch..." : "Preparing patch...",
+  )
+
   const view = createMemo(() => {
     const diffStyle = ctx.tui.diff_style
     if (diffStyle === "stacked") return "unified"
@@ -2231,7 +2269,7 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
         </For>
       </Match>
       <Match when={true}>
-        <InlineTool icon="%" pending="Preparing patch..." complete={false} part={props.part}>
+        <InlineTool icon="%" pending={patchPendingLabel()} complete={false} part={props.part}>
           Patch
         </InlineTool>
       </Match>

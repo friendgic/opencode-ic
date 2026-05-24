@@ -30,7 +30,29 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Usage, type LLMEvent } from "@opencode-ai/llm"
 
 const DOOM_LOOP_THRESHOLD = 3
+const MAX_TOOL_RAW_CHARS = 128 * 1024
 const log = Log.create({ service: "session.processor" })
+
+function toolCallStreamId(value: { id?: string; toolCallId?: string }): string | undefined {
+  if (typeof value.toolCallId === "string") return value.toolCallId
+  if (typeof value.id === "string") return value.id
+  return undefined
+}
+
+function toolInputTextDelta(value: unknown): string {
+  const v = value as Record<string, unknown>
+  if (typeof v.text === "string") return v.text
+  if (typeof v.inputTextDelta === "string") return v.inputTextDelta
+  if (typeof v.delta === "string") return v.delta
+  return ""
+}
+
+function toolInputRawText(input: unknown): string {
+  if (typeof input === "string") return input
+  if (!input || typeof input !== "object") return ""
+  const text = JSON.stringify(input)
+  return typeof text === "string" ? text : ""
+}
 
 export type Result = "compact" | "stop" | "continue"
 
@@ -354,10 +376,32 @@ export const layer = Layer.effect(
             yield* ensureToolCall(value)
             return
 
-          case "tool-input-delta":
-            // AI SDK emits a final `tool-call` with the parsed `input`; accumulating
-            // delta fragments into `state.raw` is redundant work for no current consumer.
+          case "tool-input-delta": {
+            const callID = toolCallStreamId(value)
+            const delta = toolInputTextDelta(value)
+            if (!callID || delta.length === 0) return
+            const match = yield* readToolCall(callID)
+            if (!match || match.part.type !== "tool") return
+            if (match.part.state.status !== "pending") return
+            const rawChars =
+              typeof match.part.metadata?.rawChars === "number" && Number.isFinite(match.part.metadata.rawChars)
+                ? match.part.metadata.rawChars
+                : 0
+            const nextRaw = (match.part.state.raw + delta).slice(-MAX_TOOL_RAW_CHARS)
+            yield* session.updatePart({
+              ...match.part,
+              state: {
+                status: "pending",
+                input: match.part.state.input,
+                raw: nextRaw,
+              },
+              metadata: {
+                ...(isRecord(match.part.metadata) ? match.part.metadata : {}),
+                rawChars: rawChars + delta.length,
+              },
+            })
             return
+          }
 
           case "tool-input-end": {
             const toolCall = yield* ensureToolCall(value)
@@ -380,6 +424,7 @@ export const layer = Layer.effect(
             }
             const toolCall = yield* ensureToolCall(value)
             const input = toolInput(value.input)
+            const inputRaw = toolInputRawText(input)
             if (!toolCall.call.inputEnded) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (flags.experimentalEventSystem) {
@@ -405,21 +450,34 @@ export const layer = Layer.effect(
                 timestamp: DateTime.makeUnsafe(Date.now()),
               })
             }
-            yield* updateToolCall(value.id, (match) => ({
-              ...match,
-              tool: value.name,
-              state:
-                match.state.status === "running"
-                  ? { ...match.state, input }
-                  : {
-                      status: "running",
-                      input,
-                      time: { start: Date.now() },
-                    },
-              metadata: match.metadata?.providerExecuted
-                ? { ...value.providerMetadata, providerExecuted: true }
-                : value.providerMetadata,
-            }))
+            yield* updateToolCall(value.id, (match) => {
+              const baseMetadata = match.metadata?.providerExecuted
+                ? { ...(isRecord(value.providerMetadata) ? value.providerMetadata : {}), providerExecuted: true }
+                : value.providerMetadata
+              const rawChars =
+                typeof match.metadata?.rawChars === "number" && Number.isFinite(match.metadata.rawChars)
+                  ? Math.max(match.metadata.rawChars, inputRaw.length)
+                  : inputRaw.length
+              return {
+                ...match,
+                tool: value.name,
+                state:
+                  match.state.status === "running"
+                    ? { ...match.state, input }
+                    : {
+                        status: "running",
+                        input,
+                        time: { start: Date.now() },
+                      },
+                metadata:
+                  rawChars > 0
+                    ? {
+                        ...(isRecord(baseMetadata) ? baseMetadata : {}),
+                        rawChars,
+                      }
+                    : baseMetadata,
+              }
+            })
 
             const parts = MessageV2.parts(ctx.assistantMessage.id)
             const recentParts = parts.slice(-DOOM_LOOP_THRESHOLD)
@@ -787,7 +845,10 @@ export const layer = Layer.effect(
             ctx.currentText = undefined
             ctx.reasoningMap = {}
             yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream(streamInput)
+            const stream = llm.stream({
+              ...streamInput,
+              assistantMessageID: streamInput.assistantMessageID ?? ctx.assistantMessage.id,
+            })
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),

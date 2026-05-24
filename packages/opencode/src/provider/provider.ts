@@ -1872,10 +1872,16 @@ export function sort<T extends { id: string }>(models: T[]) {
 }
 
 export function parseModel(model: string) {
-  const [providerID, ...rest] = model.split("/")
+  const index = model.startsWith("http://") || model.startsWith("https://") ? model.lastIndexOf("/") : model.indexOf("/")
+  if (index === -1) {
+    return {
+      providerID: ProviderID.make(model),
+      modelID: ModelID.make(""),
+    }
+  }
   return {
-    providerID: ProviderID.make(providerID),
-    modelID: ModelID.make(rest.join("/")),
+    providerID: ProviderID.make(model.slice(0, index)),
+    modelID: ModelID.make(model.slice(index + 1)),
   }
 }
 

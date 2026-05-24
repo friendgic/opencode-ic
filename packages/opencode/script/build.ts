@@ -12,10 +12,14 @@ const dir = path.resolve(__dirname, "..")
 
 process.chdir(dir)
 
+import pkg from "../package.json"
+
+const windowsX64Flag = process.argv.includes("--windows-x64")
+if (windowsX64Flag && !process.env.OPENCODE_VERSION) process.env.OPENCODE_VERSION = pkg.version
+
 const generated = await import("./generate.ts")
 
-import { Script } from "@opencode-ai/script"
-import pkg from "../package.json"
+const { Script } = await import("@opencode-ai/script")
 
 // Load migrations from migration directories
 const migrationDirs = (
@@ -48,6 +52,7 @@ const migrations = await Promise.all(
 console.log(`Loaded ${migrations.length} migrations`)
 
 const singleFlag = process.argv.includes("--single")
+const windowsFlag = process.argv.includes("--windows")
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
@@ -162,7 +167,11 @@ const targets = singleFlag
 
       return true
     })
-  : allTargets
+  : windowsX64Flag
+    ? allTargets.filter((item) => item.os === "win32" && item.arch === "x64" && item.avx2 !== false)
+    : windowsFlag
+      ? allTargets.filter((item) => item.os === "win32")
+      : allTargets
 
 await $`rm -rf dist`
 
@@ -202,7 +211,8 @@ for (const item of targets) {
     format: "esm",
     minify: true,
     sourcemap: sourcemapsFlag ? "linked" : "none",
-    splitting: true,
+    // Single bundle for compile: splitting duplicates @opentui/core registerEnvVar (OTUI_TREE_SITTER_WORKER_PATH).
+    splitting: false,
     compile: {
       autoloadBunfig: false,
       autoloadDotenv: false,

@@ -1,6 +1,9 @@
 import { Provider } from "@/provider/provider"
 import { serviceUse } from "@/effect/service-use"
 import * as Log from "@opencode-ai/core/util/log"
+import * as Global from "@opencode-ai/core/global"
+import { mkdir } from "fs/promises"
+import path from "path"
 import { Context, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
@@ -18,6 +21,7 @@ import { PermissionID } from "@/permission/schema"
 import { Bus } from "@/bus"
 import { Wildcard } from "@/util/wildcard"
 import { SessionID } from "@/session/schema"
+import { LLMRequestEvent } from "./llm-request-event"
 import { Auth } from "@/auth"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -32,6 +36,8 @@ export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
 export type StreamInput = {
   user: MessageV2.User
+  /** Assistant turn this `streamText` call belongs to; used for telemetry and request dumps. */
+  assistantMessageID?: string
   sessionID: string
   parentSessionID?: string
   model: Provider.Model
@@ -56,6 +62,90 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@opencode/LLM") {}
 
 export const use = serviceUse(Service)
+
+function modelMessageChars(m: ModelMessage): number {
+  const c = m.content
+  if (typeof c === "string") return c.length
+  if (!Array.isArray(c)) return JSON.stringify(c as unknown).length
+  let n = 0
+  for (const part of c) {
+    if (typeof part === "object" && part !== null) {
+      if ("text" in part && typeof (part as { text?: string }).text === "string") {
+        n += (part as { text: string }).text.length
+        continue
+      }
+      n += JSON.stringify(part).length
+    }
+  }
+  return n
+}
+
+function summarizeStreamRequest(messages: ModelMessage[], tools: Record<string, Tool>) {
+  const perMessage = messages.map((m) => ({ role: m.role, approxChars: modelMessageChars(m) }))
+  const messagesTotalChars = perMessage.reduce((acc, row) => acc + row.approxChars, 0)
+  const perTool: Record<string, { descriptionChars: number; schemaChars: number }> = {}
+  for (const [name, t] of Object.entries(tools)) {
+    const rec = t as { description?: string; parameters?: unknown; inputSchema?: unknown }
+    const desc = typeof rec.description === "string" ? rec.description : ""
+    const schema = rec.inputSchema ?? rec.parameters
+    const schemaChars = schema === undefined ? 0 : JSON.stringify(schema).length
+    perTool[name] = { descriptionChars: desc.length, schemaChars }
+  }
+  const toolsTotalChars = Object.values(perTool).reduce(
+    (acc, row) => acc + row.descriptionChars + row.schemaChars,
+    0,
+  )
+  return {
+    note: "approxChars ≈ string length; provider token count differs. Model middleware may transform prompt after this (ProviderTransform.message).",
+    toolCount: Object.keys(tools).length,
+    toolsTotalChars,
+    messagesTotalChars,
+    messages: perMessage,
+    tools: perTool,
+  }
+}
+
+function jsonSafeMessages(messages: ModelMessage[]): unknown {
+  return JSON.parse(JSON.stringify(messages))
+}
+
+function serializableToolsForLog(
+  tools: Record<string, Tool>,
+): Record<string, { description?: string; inputSchema?: unknown }> {
+  const out: Record<string, { description?: string; inputSchema?: unknown }> = {}
+  for (const [name, t] of Object.entries(tools)) {
+    const rec = t as { description?: string; inputSchema?: unknown; parameters?: unknown }
+    out[name] = {
+      description: rec.description,
+      inputSchema: rec.inputSchema ?? rec.parameters,
+    }
+  }
+  return out
+}
+
+async function writeLlmFullRequestFile(input: {
+  sessionID: string
+  assistantMessageID: string
+  model: { providerID: string; id: string }
+  messages: ModelMessage[]
+  tools: Record<string, Tool>
+}) {
+  const dir = path.join(Global.Path.log, "llm-requests")
+  await mkdir(dir, { recursive: true })
+  const safeSession = input.sessionID.replace(/[^a-zA-Z0-9_-]+/g, "_")
+  const file = path.join(dir, `${safeSession}-${input.assistantMessageID}-${Date.now()}.json`)
+  const payload = {
+    time: new Date().toISOString(),
+    sessionID: input.sessionID,
+    assistantMessageID: input.assistantMessageID,
+    note: "Captured before model middleware applies ProviderTransform.message; vendor wire format may differ.",
+    model: input.model,
+    messages: jsonSafeMessages(input.messages),
+    tools: serializableToolsForLog(input.tools),
+  }
+  await Bun.write(file, JSON.stringify(payload, null, 2) + "\n")
+  return file
+}
 
 const live: Layer.Layer<
   Service,
@@ -265,6 +355,35 @@ const live: Layer.Layer<
           "llm.model": input.model.id,
         }),
       )
+
+      const summary = summarizeStreamRequest(prepared.messages, prepared.tools)
+      const assistantMessageID = input.assistantMessageID ?? "unknown"
+      const bus = yield* Effect.serviceOption(Bus.Service)
+      if (Option.isSome(bus)) {
+        yield* bus.value.publish(LLMRequestEvent.Summary, {
+          sessionID: SessionID.make(input.sessionID),
+          assistantMessageID,
+          approxTotalChars: summary.messagesTotalChars + summary.toolsTotalChars,
+          messagesTotalChars: summary.messagesTotalChars,
+          toolsTotalChars: summary.toolsTotalChars,
+          messageCount: prepared.messages.length,
+          toolCount: Object.keys(prepared.tools).length,
+        })
+      }
+      if (cfg.experimental?.log_llm_full === true) {
+        const outPath = yield* Effect.promise(() =>
+          writeLlmFullRequestFile({
+            sessionID: input.sessionID,
+            assistantMessageID,
+            model: { providerID: input.model.providerID, id: input.model.id },
+            messages: prepared.messages,
+            tools: prepared.tools,
+          }),
+        )
+        l.info("stream.request.full", { path: outPath })
+      }
+      l.debug("stream.request", summary)
+
       // Default runtime path: AI SDK owns provider execution and tool dispatch;
       // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
       return {

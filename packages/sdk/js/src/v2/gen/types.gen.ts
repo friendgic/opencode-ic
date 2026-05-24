@@ -27,6 +27,7 @@ export type Event =
   | EventTodoUpdated
   | EventSessionStatus
   | EventSessionIdle
+  | EventSessionLlmRequest
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
   | EventCommandExecuted
@@ -828,6 +829,7 @@ export type GlobalEvent = {
     | EventTodoUpdated
     | EventSessionStatus
     | EventSessionIdle
+    | EventSessionLlmRequest
     | EventMcpToolsChanged
     | EventMcpBrowserOpenFailed
     | EventCommandExecuted
@@ -2651,6 +2653,20 @@ export type EventSessionIdle = {
   type: "session.idle"
   properties: {
     sessionID: string
+  }
+}
+
+export type EventSessionLlmRequest = {
+  id: string
+  type: "session.llm.request"
+  properties: {
+    sessionID: string
+    assistantMessageID: string
+    approxTotalChars: number
+    messagesTotalChars: number
+    toolsTotalChars: number
+    messageCount: number
+    toolCount: number
   }
 }
 
